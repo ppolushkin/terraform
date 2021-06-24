@@ -1,0 +1,138 @@
+
+resource "azurerm_resource_group" "sqlrg" {
+  name     = "sql-db-rg"
+  location = "West Europe"
+}
+
+//Administrative container for your databases
+//you can control logins, firewall rules,
+//and security policies through the logical server
+resource "azurerm_sql_server" "sqlServer" {
+  //must be unique across the globe
+  name                         = "myexamplesqlserver"
+  resource_group_name          = azurerm_resource_group.sqlrg.name
+  location                     = "West US"
+  version                      = "12.0"
+  administrator_login          = "adm1n157r470r"
+  administrator_login_password = "4-v3ry-53cr37-p455w0rd"
+
+// ???
+// Default, Proxy, Redirect
+// connection_policy = Default
+
+//  Specifies the identity type of the Microsoft SQL Server ???
+// есть только SystemAssigned
+//  identity {
+//    type = "SystemAssigned"
+//  }
+
+// If server auditing is enabled, it always applies to the database.
+// The database will be audited, regardless of the database auditing settings.
+// https://docs.microsoft.com/en-us/azure/azure-sql/database/auditing-overview#server-vs-database-level
+//  extended_auditing_policy {
+//    storage_account_access_key = ""
+//    storage_account_access_key_is_secondary = false
+//    storage_endpoint = ""
+//    retention_in_days = 365
+//  }
+
+}
+
+resource "azurerm_sql_firewall_rule" "example" {
+  name                = "FirewallRule1"
+  resource_group_name = azurerm_resource_group.sqlrg.name
+  server_name         = azurerm_sql_server.sqlServer.name
+  start_ip_address    = "10.0.17.62"
+  end_ip_address      = "10.0.17.62"
+
+}
+
+resource "azurerm_storage_account" "sa" {
+  name                     = "examplesa"
+  resource_group_name      = azurerm_resource_group.sqlrg.name
+  location                 = azurerm_resource_group.sqlrg.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+resource "azurerm_mssql_database" "example" {
+  name                = "myexamplesqldatabase"
+  server_id           = azurerm_sql_server.sqlServer.id
+  //how strings are sorted in db
+  collation           = "SQL_Latin1_General_CP1_CI_AS"
+
+// license_type = "LicenseIncluded"
+
+// max_size_gb = 5
+
+//GP_S_Gen5_2,HS_Gen4_1,BC_Gen5_2, ElasticPool, Basic,S0, P2 ,DW100c, DS100
+//GP_S_Gen5_2 is General Purpose Serverles Gen5_2
+//Note!: Serverless only applied to single db. You can not use it together with
+//elastic pool
+// https://docs.microsoft.com/en-gb/azure/azure-sql/database/serverless-tier-overview
+  sku_name = "GP_S_Gen5_2"
+
+//must be Default to create new database
+//Default, Copy, OnlineSecondary, NonReadableSecondary, PointInTimeRestore, Recovery, Restore or RestoreLongTermRetentionBackup
+//create_mode = "Default"
+
+// Next 2 props are only fro business critical (which makes 3 replicas and costs 3-x more) or Premium
+// zone_redundant = true
+// read_scale = true
+
+// You can use elastic pool
+// elastic_pool_id = azurerm_sql_elasticpool.example.id
+
+//Enabling auditing on the database, in addition to enabling it on the server,
+//does not override or change any of the settings of the server auditing. Both audits will exist side by side.
+//In other words, the database is audited twice in parallel;
+//https://docs.microsoft.com/en-us/azure/azure-sql/database/auditing-overview#server-vs-database-level
+  extended_auditing_policy {
+    storage_endpoint                        = azurerm_storage_account.sa.primary_blob_endpoint
+    storage_account_access_key              = azurerm_storage_account.sa.primary_access_key
+    storage_account_access_key_is_secondary = true
+    retention_in_days                       = 6
+  }
+}
+
+//когда много баз данных в компании можно шарить
+//вычислительные мощности
+resource "azurerm_mssql_elasticpool" "example" {
+  name                = "test-epool"
+  resource_group_name = azurerm_resource_group.example.name
+  location            = azurerm_resource_group.example.location
+  server_name         = azurerm_sql_server.example.name
+  license_type        = "LicenseIncluded"
+  max_size_gb         = 756
+
+  sku {
+    name     = "GP_Gen5"
+    tier     = "GeneralPurpose"
+    family   = "Gen5"
+    capacity = 4
+  }
+
+  per_database_settings {
+    min_capacity = 0.25
+    max_capacity = 4
+  }
+}
+
+//для открытых публично вооот
+resource "azurerm_mssql_firewall_rule" "example" {
+  name             = "FirewallRule1"
+  server_id        = azurerm_mssql_server.example.id
+  start_ip_address = "10.0.17.62"
+  end_ip_address   = "10.0.17.62"
+}
+
+//todo:
+//https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/mssql_virtual_network_rule
+//https://docs.microsoft.com/en-us/azure/azure-sql/database/vnet-service-endpoint-rule-overview
+
+//todo:
+//Azure SQL Database, Azure Synapse Analytics creating private link to virtual network
+//https://docs.microsoft.com/en-us/azure/azure-sql/database/private-endpoint-overview
+
+//Supports transparent data encryption
+//https://docs.microsoft.com/en-us/azure/azure-sql/database/transparent-data-encryption-tde-overview?view=sql-server-ver15&tabs=azure-portal

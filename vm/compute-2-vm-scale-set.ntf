@@ -1,0 +1,149 @@
+
+//https://docs.microsoft.com/en-us/learn/modules/build-app-with-scale-sets/
+
+
+resource "azurerm_resource_group" "scale-set-rg" {
+  name     = "scale-set-rg"
+  location = "West Europe"
+}
+
+
+//
+// Load balancer like in network-5-load-balancing.ntf
+//
+resource "azurerm_virtual_network" "vn" {
+  name                = "example-network"
+  resource_group_name = azurerm_resource_group.scale-set-rg.name
+  location            = azurerm_resource_group.scale-set-rg.location
+  address_space       = ["10.0.0.0/16"]
+}
+
+resource "azurerm_subnet" "internal" {
+  name                 = "internal"
+  resource_group_name  = azurerm_resource_group.scale-set-rg.name
+  virtual_network_name = azurerm_virtual_network.vn.name
+  address_prefixes     = ["10.0.2.0/24"]
+}
+
+// links load balancer with internet
+resource "azurerm_public_ip" "vm-scale-set-pip" {
+  name                = "vm-scale-set-pip"
+  location            = azurerm_resource_group.scale-set-rg.location
+  resource_group_name = azurerm_resource_group.scale-set-rg.name
+  allocation_method   = "Static"
+}
+
+// links load balancer with virtual machine set
+resource "azurerm_lb_backend_address_pool" "bpepool" {
+  loadbalancer_id     = azurerm_lb.lb.id
+  name                = "BackEndAddressPool"
+}
+
+resource "azurerm_lb" "lb" {
+  name                = "webServerScaleSetLB"
+  location            = azurerm_resource_group.scale-set-rg.location
+  resource_group_name = azurerm_resource_group.scale-set-rg.name
+
+  frontend_ip_configuration {
+    name                 = "PublicIPAddress"
+    public_ip_address_id = azurerm_public_ip.vm-scale-set-pip.id
+  }
+}
+
+resource "azurerm_lb_probe" "vm-scale-set-probe" {
+  resource_group_name = azurerm_resource_group.scale-set-rg.name
+  loadbalancer_id     = azurerm_lb.lb.id
+  name                = "webServerHealth"
+  protocol            = "Http"
+  request_path        = "/"
+  port                = 80
+}
+
+resource "azurerm_lb_rule" "rule" {
+  resource_group_name            = azurerm_resource_group.scale-set-rg.name
+  loadbalancer_id                = azurerm_lb.lb.id
+  name                           = "webServerLoadBalancerRuleWeb"
+  protocol                       = "Tcp"
+  frontend_port                  = 80
+  backend_port                   = 80
+  frontend_ip_configuration_name = "PublicIPAddress"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.bpepool.id
+  probe_id = azurerm_lb_probe.vm-scale-set-probe.id
+}
+
+//
+// virtual machine scale set
+// looks very similar to vm with only difference in
+//
+resource "azurerm_linux_virtual_machine_scale_set" "scale" {
+  name                = "webServerScaleSet"
+  resource_group_name = azurerm_resource_group.scale-set-rg.name
+  location            = azurerm_resource_group.scale-set-rg.location
+  sku                 = "Standard_F2"
+  instances           = 1
+  admin_username      = "adminuser"
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  custom_data = filebase64("${path.module}/vm/scripts/cloud-init.yml")
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "18.04-LTS"
+    version   = "latest"
+  }
+
+  os_disk {
+    storage_account_type = "Standard_LRS"
+    caching              = "ReadWrite"
+  }
+
+
+  network_interface {
+    name    = "vm-scale-set-nic"
+    primary = true
+
+    ip_configuration {
+      name      = "internal"
+      primary   = true
+      subnet_id = azurerm_subnet.internal.id
+
+      //linked with load balancer backend address pool
+      load_balancer_backend_address_pool_ids = [azurerm_lb_backend_address_pool.bpepool.id]
+      load_balancer_inbound_nat_rules_ids = []
+    }
+  }
+
+  upgrade_mode = "Automatic" //default  Existing VMs in the scale set aren't updated. All changes must be done manually. This mode is the default.
+  // "Automatic" The scale set doesn't define when the VMs are upgraded. They could all update at the same time, causing a service outage.
+  // "Rolling" The scale set rolls out the update in batches across the VMs in the scale set. An optional pause can minimize or eliminate a service outage.
+  //           In this mode, machines in the scale set might run different versions of the app for a short time.
+  //           This mode requires that you either add a health probe to the scale set or apply the application health extension to the scale set.
+
+}
+
+// You can autoscale by schedule and by metrics
+// https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/monitor_autoscale_setting
+
+
+//You can set extensions similar to VMs
+//https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/virtual_machine_scale_set_extension
+
+//
+//Update an application across a scale set by using a custom script extension
+//
+resource "azurerm_virtual_machine_scale_set_extension" "update" {
+  name                         = "update-script"
+  virtual_machine_scale_set_id = azurerm_linux_virtual_machine_scale_set.scale.id
+  publisher                    = "Microsoft.Azure.Extensions"
+  type                         = "CustomScript"
+  type_handler_version         = "2.0"
+  settings = jsonencode({
+    "fileUris": ["https://raw.githubusercontent.com/yourrepo/master/custom_application_v2.sh"],
+    "commandToExecute": "./custom_application_v2.sh"
+  })
+}

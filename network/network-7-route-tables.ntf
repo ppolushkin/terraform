@@ -1,0 +1,238 @@
+
+//https://docs.microsoft.com/en-us/learn/modules/control-network-traffic-flow-with-routes/1-introduction
+
+resource "azurerm_resource_group" "rg" {
+  name = "rg-weu"
+  location = "West Europe"
+  tags = {
+    createdBy = "terraform"
+  }
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  name = "vnet"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space = [
+    "10.0.0.0/16"]
+}
+
+// IDEA of an example is to
+// route from public subnet to private via NVA VM that is in dmzsubnet
+
+resource "azurerm_subnet" "publicsubnet" {
+  name = "publicsubnet"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes = [
+    "10.0.0.0/24"]
+}
+
+resource "azurerm_subnet" "privatesubnet" {
+  name = "privatesubnet"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes = [
+    "10.0.1.0/24"]
+}
+
+resource "azurerm_subnet" "dmzsubnet" {
+  name = "dmzsubnet"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes = [
+    "10.0.2.0/24"]
+}
+
+
+// Route table
+//https://docs.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview
+resource "azurerm_route_table" "rt" {
+  location = azurerm_resource_group.rg.location
+  name = "publictable"
+  resource_group_name = azurerm_resource_group.rg.name
+  disable_bgp_route_propagation = false
+}
+
+resource "azurerm_route" "route" {
+  address_prefix = "10.0.1.0/24" // ip prefix of private subnet
+  name = "force-NVA-route"
+  next_hop_type = "VirtualAppliance"
+  next_hop_in_ip_address =  "10.0.2.4" // ip address of NVA
+  resource_group_name = azurerm_resource_group.rg.name
+  route_table_name = azurerm_route_table.rt.name
+}
+
+// Associate route table with public subnet
+resource "azurerm_subnet_route_table_association" "rt" {
+  route_table_id = azurerm_route_table.rt.id
+  subnet_id = azurerm_subnet.publicsubnet.id
+}
+
+
+//NVA it is VM
+//with special soft and ip forwarding on NIC and OS
+
+resource "azurerm_public_ip" "nva" {
+  name = "nva"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  allocation_method = "Dynamic"
+}
+
+resource "azurerm_network_interface" "nva" {
+  name                = "nva"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+//Enable ip forwarding on NIC
+  enable_ip_forwarding = true
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.dmzsubnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id = azurerm_public_ip.nva.id
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "webServer1" {
+  name                = "NVA"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_DS1_v2"
+  admin_username      = "adminuser"
+
+  network_interface_ids = [
+    azurerm_network_interface.nva.id,
+  ]
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "18.04-LTS"
+    version   = "latest"
+  }
+
+//Enable ip-forwarding on OS
+  custom_data = filebase64("${path.module}/scripts/enable-ip-forwarding.sh")
+}
+
+
+// Private and public VMs
+// Private VM
+resource "azurerm_public_ip" "private" {
+  name = "private"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  allocation_method = "Dynamic"
+}
+
+resource "azurerm_network_interface" "private" {
+  name                = "private"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.privatesubnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id = azurerm_public_ip.private.id
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "private" {
+  name                = "private"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_DS1_v2"
+  admin_username      = "adminuser"
+
+  network_interface_ids = [
+    azurerm_network_interface.private.id,
+  ]
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "18.04-LTS"
+    version   = "latest"
+  }
+
+  custom_data = filebase64("${path.module}/scripts/enable-trace-routes.txt")
+}
+
+// Public VM
+resource "azurerm_public_ip" "public" {
+  name = "public"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  allocation_method = "Dynamic"
+}
+
+resource "azurerm_network_interface" "public" {
+  name                = "public"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.publicsubnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id = azurerm_public_ip.public.id
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "public" {
+  name                = "public"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_DS1_v2"
+  admin_username      = "adminuser"
+
+  network_interface_ids = [
+    azurerm_network_interface.public.id,
+  ]
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "18.04-LTS"
+    version   = "latest"
+  }
+
+  custom_data = filebase64("${path.module}/scripts/enable-trace-routes.txt")
+}
+
+
+

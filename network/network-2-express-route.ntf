@@ -1,0 +1,52 @@
+
+resource "azurerm_resource_group" "rg" {
+  name = "rg-weu"
+  location = "West Europe"
+  tags = {
+    createdBy = "terraform"
+  }
+}
+
+// https://docs.microsoft.com/en-us/learn/modules/connect-on-premises-network-with-vpn-gateway/
+// Azure network
+
+resource "azurerm_virtual_network" "vn1" {
+  name = "VNet1"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space = [
+    "10.0.0.0/16"]
+}
+
+//JFIY: you can share express route gateway subnet with vpn virtual network gateway
+// to improve stability it is recommended to create redundant vpn tunnel together with express route
+//that would require to setup BGP routes somehow.
+resource "azurerm_subnet" "vn1-gateway" {
+  name = "GatewaySubnet"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vn1.name
+  address_prefixes = [
+    "10.0.255.0/27"]
+}
+
+resource "azurerm_public_ip" "vn1" {
+  name = "PIP-VNG-Azure-VNet-1"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  allocation_method = "Dynamic"
+}
+
+resource "azurerm_virtual_network_gateway" "expressRoute" {
+  name = "vng-expressRoute"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  type = "ExpressRoute"
+  sku = "Standard"
+
+  ip_configuration {
+    name = "vnetGatewayConfig"
+    public_ip_address_id = azurerm_public_ip.vn1.id
+    subnet_id = azurerm_subnet.vn1-gateway.id
+  }
+}

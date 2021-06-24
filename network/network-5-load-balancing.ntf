@@ -1,0 +1,163 @@
+//https://docs.microsoft.com/en-us/learn/modules/improve-app-scalability-resiliency-with-load-balancer/2-load-balancer-features
+
+resource "azurerm_resource_group" "rg" {
+  name = "rg-weu"
+  location = "West Europe"
+  tags = {
+    createdBy = "terraform"
+  }
+}
+
+resource "azurerm_resource_group" "lb" {
+  name = "loadbalancer-rg-weu"
+  location = "West Europe"
+  tags = {
+    createdBy = "terraform"
+  }
+}
+
+resource "azurerm_public_ip" "pip1" {
+  name = "myPublicIP"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.lb.location
+  allocation_method = "Static"
+// should be the same as load balancer sku
+//  sku = "Standard"
+//  sku = "Basic"
+}
+
+//Works on layer 4 of the Open Systems Interconnection (OSI) model.
+//That's why SSL/TLS are not supported
+resource "azurerm_lb" "loadBalancer" {
+  name                = "myLoadBalancer"
+  location            = azurerm_resource_group.lb.location
+  resource_group_name = azurerm_resource_group.lb.name
+
+// https://docs.microsoft.com/en-us/azure/load-balancer/skus
+//  sku = "Basic" - no charge Supports up to 300 instances.
+//  sku = "Standard" - recommended Supports up to 1000 instances.
+
+  frontend_ip_configuration {
+    name                 = "PublicIPAddress"
+// For external load balancer
+    public_ip_address_id = azurerm_public_ip.pip1.id
+
+// For "internal" load balancer
+//    private_ip_address = "192.168.1.200"
+//    private_ip_address_allocation = "Static"
+//    subnet_id = "${data.azurerm_subnet.test.id}"
+  }
+}
+
+resource "azurerm_lb_rule" "rule" {
+  resource_group_name            = azurerm_resource_group.lb.name
+  loadbalancer_id                = azurerm_lb.loadBalancer.id
+  name                           = "myHTTPRule"
+  protocol                       = "Tcp"
+  frontend_port                  = 80
+  backend_port                   = 80
+  frontend_ip_configuration_name = "PublicIPAddress"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.backendAddressPool.id
+  probe_id = azurerm_lb_probe.myHealthProbe.id
+//  load_distribution - (Optional) Specifies the load balancing distribution type to be used by the Load Balancer.
+// Possible values are:
+// Default – The load balancer is configured to use a 5 tuple hash to map traffic to available servers.
+// SourceIP – The load balancer is configured to use a 2 tuple hash to map traffic to available servers.
+// SourceIPProtocol – The load balancer is configured to use a 3 tuple hash to map traffic to available servers.
+// Also known as Session Persistence, where the options are called None, Client IP and Client IP and Protocol respectively.
+}
+
+resource "azurerm_lb_backend_address_pool" "backendAddressPool" {
+  resource_group_name = azurerm_resource_group.lb.name
+  loadbalancer_id     = azurerm_lb.loadBalancer.id
+  name                = "myBackEndPool"
+}
+
+// It also should be linked with NIC of VMs
+// https://docs.microsoft.com/en-us/learn/modules/improve-app-scalability-resiliency-with-load-balancer/4-exercise-configure-public-load-balancer?pivots=bash
+// step 5
+//
+// or with the help of assosiation
+//resource "azurerm_network_interface_backend_address_pool_association" "example" {
+//  network_interface_id    = azurerm_network_interface.example.id
+//  ip_configuration_name   = "testconfiguration1"
+//  backend_address_pool_id = azurerm_lb_backend_address_pool.example.id
+//}
+
+resource "azurerm_lb_probe" "myHealthProbe" {
+  resource_group_name = azurerm_resource_group.lb.name
+  loadbalancer_id     = azurerm_lb.loadBalancer.id
+  name                = "myHealthProbe"
+  port                = 80
+  //Http, Https or Tcp
+  protocol = "tcp"
+}
+
+//You can use LB to provide access to internet for backend instances
+//so that all of them will go via public IP of LB.
+//you can use one PIP for several VM.
+
+//https://docs.microsoft.com/en-us/azure/load-balancer/load-balancer-outbound-connections
+
+//By default if you don't have a public IP address, you will be able to reach Internet.
+
+//The frontend IPs of an Azure public load balancer can be used to provide outbound
+//connectivity to the internet for backend instances.
+//This configuration uses source network address translation (SNAT).
+//SNAT rewrites the IP address of the backend to the public IP address of your load balancer.
+
+//SNAT enables IP masquerading of the backend instance.
+//This masquerading prevents outside sources from having a direct address to the backend instances.
+//Sharing an IP address between backend instances reduces the cost of static public IPs and supports
+//scenarios such as simplifying IP allow lists with traffic from known public IPs.
+
+//You will need to setup outbound LB rule to enable SNAT:
+
+//resource "azurerm_lb_outbound_rule" "example" {
+//  resource_group_name     = azurerm_resource_group.example.name
+//  loadbalancer_id         = azurerm_lb.example.id
+//  name                    = "OutboundRule"
+//  protocol                = "Tcp"
+//  backend_address_pool_id = azurerm_lb_backend_address_pool.example.id
+//
+//  allocated_outbound_ports = "1000"
+//
+//  frontend_ip_configuration {
+//    name = "PublicIPAddress"
+//  }
+//}
+
+//it is here because i didnt find better place for it
+resource "azurerm_frontdoor" "fd" {
+  enforce_backend_pools_certificate_name_check = false
+  name = ""
+  resource_group_name = ""
+  backend_pool {
+    health_probe_name = ""
+    load_balancing_name = ""
+    name = ""
+    backend {
+      address = ""
+      host_header = ""
+      http_port = 0
+      https_port = 0
+    }
+  }
+  backend_pool_health_probe {
+    name = ""
+  }
+  backend_pool_load_balancing {
+    name = ""
+  }
+  frontend_endpoint {
+    custom_https_provisioning_enabled = false
+    host_name = ""
+    name = ""
+  }
+  routing_rule {
+    accepted_protocols = []
+    frontend_endpoints = []
+    name = ""
+    patterns_to_match = []
+  }
+}

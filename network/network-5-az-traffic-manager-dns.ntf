@@ -1,0 +1,100 @@
+
+// https://docs.microsoft.com/en-us/learn/modules/distribute-load-with-traffic-manager/2-priority-routing
+
+resource "azurerm_resource_group" "deploy" {
+  name = "deploy-eas"
+  location = "eastasia"
+  tags = {
+    createdBy = "terraform"
+  }
+}
+
+resource "azurerm_resource_group" "rg" {
+  name = "rg-eas"
+  location = "eastasia"
+  tags = {
+    createdBy = "terraform"
+  }
+}
+
+resource "azurerm_resource_group_template_deployment" "deploy" {
+  name                = "deploy"
+  resource_group_name = azurerm_resource_group.deploy.name
+  deployment_mode     = "Complete"
+  template_content    = file("${path.module}/network/templates/deploymentTemplate.json")
+}
+
+data "azurerm_public_ip" "eastasia" {
+//  depends_on = [azurerm_resource_group_template_deployment.deploy]
+  name = "eastasia-vm-nic-pip"
+  resource_group_name = azurerm_resource_group.deploy.name
+}
+
+data "azurerm_public_ip" "westus2" {
+//  depends_on = [azurerm_resource_group_template_deployment.deploy]
+  name = "westus2-vm-nic-pip"
+  resource_group_name = azurerm_resource_group.deploy.name
+}
+
+resource "azurerm_traffic_manager_profile" "priority" {
+  name = "TM-MusicStream-Priority"
+  resource_group_name = azurerm_resource_group.rg.name
+
+  //Geographic - Traffic is routed based on Geographic regions specified in the Endpoint.
+  //MultiValue - All healthy Endpoints are returned. MultiValue routing method works only if all the endpoints of type ‘External’ and are specified as IPv4 or IPv6 addresses.
+  //Performance - Traffic is routed via the User's closest Endpoint
+  //Priority - Traffic is routed to the Endpoint with the lowest priority value.
+  //Subnet - Traffic is routed based on a mapping of sets of end-user IP address ranges to a specific Endpoint within a Traffic Manager profile.
+  //Weighted - Traffic is spread across Endpoints proportional to their weight value.
+  traffic_routing_method = "Priority"
+
+  dns_config {
+    relative_name = "TM-MusicStream-Priority-unique-name"
+    ttl = 0
+  }
+  monitor_config {
+    port = 80
+    protocol = "http"
+    path = "/"
+  }
+}
+
+resource "azurerm_traffic_manager_endpoint" "primary" {
+  name = "Primary-WestUS"
+  profile_name = azurerm_traffic_manager_profile.priority.name
+  resource_group_name = azurerm_resource_group.rg.name
+  type = "azureEndpoints"
+  priority = 1
+  target_resource_id = data.azurerm_public_ip.westus2.id
+}
+
+resource "azurerm_traffic_manager_endpoint" "secondary" {
+  name = "Failover-EastAsia"
+  profile_name = azurerm_traffic_manager_profile.priority.name
+  resource_group_name = azurerm_resource_group.rg.name
+  type = "azureEndpoints"
+  priority = 2
+  target_resource_id = data.azurerm_public_ip.eastasia.id
+}
+
+
+output "WestId" {
+  value = data.azurerm_public_ip.westus2.ip_address
+}
+
+output "WestFqdn" {
+  value = data.azurerm_public_ip.westus2.fqdn
+}
+
+output "EastId" {
+  value = data.azurerm_public_ip.eastasia.ip_address
+}
+
+output "EastFqdn" {
+  value = data.azurerm_public_ip.eastasia.fqdn
+}
+
+output "priority-domain-name" {
+  value = azurerm_traffic_manager_profile.priority.fqdn
+}
+

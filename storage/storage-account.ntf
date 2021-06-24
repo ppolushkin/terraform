@@ -1,0 +1,59 @@
+//https://docs.microsoft.com/en-us/learn/modules/create-azure-storage-account/1-introduction
+
+//Azure Storage is
+//The four services: Azure Blobs, Azure Files, Azure Queues, and Azure Tables
+
+//A storage account is a container that groups a set of Azure Storage services together.
+
+//Storage account required for Azure Storage (Azure Blobs, Azure Files, Azure Queues, and Azure Tables). CosmoDb, Azure Sql Database, ...
+//https://docs.microsoft.com/en-us/learn/modules/create-azure-storage-account/2-decide-how-many-storage-accounts-you-need
+
+resource "azurerm_resource_group" "rg-sa" {
+  name     = "storage-account-rg-weu"
+  location = "West Europe"
+}
+
+resource "azurerm_storage_account" "sa1" {
+  name                     = "storageaccountname"
+  resource_group_name      = azurerm_resource_group.rg-sa.name
+  location                 = azurerm_resource_group.rg-sa.location
+
+  //Standard allows you to have any data service (Blob, File, Queue, Table) and uses magnetic disk drives
+  //Premium allows storing unstructured object data as block blobs or append blobs, SSD
+  //You CAN use Premium with LRS!
+  account_tier             = "Standard"
+  //GRP = geo-redundant storage - replication at different datacenters across the world
+  //LRS = locally-redundant storage -  has 3 copies of your data within the data center BUT will not help if datacenter dissapeared
+  account_replication_type = "GRS"
+  //Defines the access tier for BlobStorage, FileStorage and StorageV2 accounts. Valid options are Hot and Cool, defaults to Hot
+  //todo: cool vs hot
+  access_tier = "Hot"
+  //Default true
+  enable_https_traffic_only = true
+  //Possible values are TLS1_0, TLS1_1, and TLS1_2. Defaults to TLS1_0 for new storage accounts
+  min_tls_version = TLS1_0
+  //BlobStorage, BlockBlobStorage, FileStorage, Storage and StorageV2.
+  //All are legacy. Use StorageV2
+  //Changing this forces a new resource to be created. Defaults to StorageV2
+  account_kind = "StorageV2"
+   //allow only from db subnet
+//  network_rules {
+//    default_action             = "Deny"
+//    virtual_network_subnet_ids = [azurerm_subnet.db.id]
+//  }
+
+  //allows only from public IPs
+//  network_rules {
+//    default_action = "Deny"
+//    //List of public IP or IP ranges in CIDR Format
+//    ip_rules = ["123.34.23.23/32"]
+//  }
+}
+
+output "my-connection-string"  {
+  value = azurerm_storage_account.sa1.primary_connection_string
+}
+
+//Using that connection string and microsoft libraries you can
+//create container and put blob inside
+//https://docs.microsoft.com/en-us/learn/modules/connect-an-app-to-azure-storage/9-initialize-the-storage-account-model?pivots=javascript

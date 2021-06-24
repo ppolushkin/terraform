@@ -1,0 +1,195 @@
+
+resource "azurerm_resource_group" "rg" {
+  name = "rg-weu"
+  location = "West Europe"
+  tags = {
+    createdBy = "terraform"
+  }
+}
+
+// https://docs.microsoft.com/en-us/learn/modules/connect-on-premises-network-with-vpn-gateway/
+// Azure network
+
+resource "azurerm_virtual_network" "vn1" {
+  name = "Azure-VNet-1"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space = [
+    "10.0.0.0/16"]
+}
+
+resource "azurerm_subnet" "vn1-services" {
+  name = "Services"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vn1.name
+  address_prefixes = [
+    "10.0.0.0/24"]
+}
+
+resource "azurerm_subnet" "vn1-gateway" {
+  name = "GatewaySubnet"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vn1.name
+//  Use at least a /27 address mask to make sure you have enough IP addresses in the subnet for future growth
+  address_prefixes = [
+    "10.0.255.0/27"]
+}
+
+resource "azurerm_public_ip" "vn1" {
+  name = "PIP-VNG-Azure-VNet-1"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  allocation_method = "Dynamic"
+}
+
+//https://docs.microsoft.com/en-us/learn/modules/connect-on-premises-network-with-vpn-gateway/3-exercise-prepare-azure-and-on-premises-vnets-using-azure-cli-commands
+resource "azurerm_local_network_gateway" "HQ" {
+  name = "LNG-HQ-Network"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  //gateway address you connect to
+  gateway_address = azurerm_public_ip.hq.ip_address
+  //represents address space of network you connect to.
+  address_space = [
+    "172.16.0.0/16"]
+//JFYI:
+//  bgp_settings {
+//    asn = 0
+//    bgp_peering_address = ""
+//  }
+}
+
+resource "azurerm_virtual_network_gateway" "VNG-Azure-VNet-1" {
+  name = "VNG-Azure-VNet-1"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  type = "Vpn" //ExpressRoute
+
+// Only for specific scenarios like compatibility with legacy on-premises VPN devices
+// IKEv1 only - Internet Key Exchange
+// static routing only
+//vpn_type = "PolicyBased"
+
+// Route-based VPNs are the preferred connection method
+// more resilient to topology changes such as the creation of new subnets
+// Can use dynamic routing protocols whatever it means
+// Supports IKEv2
+  vpn_type = "RouteBased"
+
+  //JFYI: active-active requires BGP configuration for Site-to-Site
+  //automatically configured for Vnet-to-Vnet
+  //it improves stability
+  active_active = false
+  enable_bgp = false
+
+//Basic* 	    Maximum: 10 	100 Mbps 	Not supported
+//VpnGw1/Az 	Maximum: 30 	650 Mbps 	Supported
+//VpnGw2/Az 	Maximum: 30 	1 Gbps 	    Supported
+//VpnGw3/Az 	Maximum: 30 	1.25 Gbps 	Supported
+  sku = "Basic"
+
+  ip_configuration {
+    name = "vnetGatewayConfig"
+    public_ip_address_id = azurerm_public_ip.vn1.id
+    subnet_id = azurerm_subnet.vn1-gateway.id
+  }
+
+// JFYI: BGP is supported on route-based VPN gateways only and not on Basic sku.
+//  bgp_settings {
+//    asn = 64521
+//    peering_address = "10.1.12.1"
+//  }
+}
+
+//Connect your gateway with azurerm_local_network_gateway that describes remote gate
+resource "azurerm_virtual_network_gateway_connection" "onpremise" {
+  name = "onpremise"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  type = "IPsec"
+  virtual_network_gateway_id = azurerm_virtual_network_gateway.VNG-Azure-VNet-1.id
+  local_network_gateway_id = azurerm_local_network_gateway.HQ.id
+
+//share beetween two gateways for IPSec
+  shared_key = "4-v3ry-53cr37-1p53c-5h4r3d-k3y"
+// JFYI:
+//  enable_bgp = false
+}
+
+//HQ office
+
+
+resource "azurerm_virtual_network" "hq" {
+  name = "HQ-Network"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space = [
+    "172.16.0.0/16"]
+}
+
+resource "azurerm_subnet" "hq-applications" {
+  name = "Applications"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.hq.name
+  address_prefixes = [
+    "172.16.0.0/24"]
+}
+
+resource "azurerm_subnet" "hq-gateway" {
+  name = "GatewaySubnet"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.hq.name
+  address_prefixes = [
+    "172.16.255.0/27"]
+}
+
+resource "azurerm_public_ip" "hq" {
+  name = "PIP-VNG-HQ-Network"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  allocation_method = "Dynamic"
+}
+
+resource "azurerm_virtual_network_gateway" "VNG-HQ-Network" {
+  name = "VNG-HQ-Network"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  type = "Vpn"
+  vpn_type = "RouteBased"
+
+  active_active = false
+  enable_bgp = false
+  sku = "Basic"
+
+  ip_configuration {
+    name = "vnetGatewayConfig"
+    public_ip_address_id = azurerm_public_ip.hq.id
+    subnet_id = azurerm_subnet.hq-gateway.id
+  }
+}
+
+resource "azurerm_local_network_gateway" "Azure-VNet-1" {
+  name = "LNG-Azure-VNet-1"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  gateway_address = azurerm_public_ip.vn1.ip_address
+  address_space = ["10.0.0.0/16"]
+}
+
+resource "azurerm_virtual_network_gateway_connection" "az" {
+  name = "az"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  type = "IPsec"
+  virtual_network_gateway_id = azurerm_virtual_network_gateway.VNG-HQ-Network.id
+  local_network_gateway_id = azurerm_local_network_gateway.Azure-VNet-1.id
+
+  shared_key = "4-v3ry-53cr37-1p53c-5h4r3d-k3y"
+}
+
+//High availiability
+//https://docs.microsoft.com/en-us/azure/vpn-gateway/vpn-gateway-highlyavailable

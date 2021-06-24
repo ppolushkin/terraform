@@ -1,0 +1,53 @@
+
+
+resource "azurerm_virtual_machine_extension" "example" {
+  name                 = "hostname"
+  virtual_machine_id   = azurerm_virtual_machine.example.id
+
+//The Publisher and Type of Virtual Machine Extensions can be found using the Azure CLI, via:
+//
+// az vm extension image list --location westus -o table
+// CustomScriptExtension                Microsoft.Azure.Extensions
+// The custom script extension downloads and runs scripts on Azure virtual machines.
+// You can have a PowerShell script that's on your local file server, GitHub, Azure Storage,
+// The script is downloaded and then executed on the target virtual machine
+// A custom script extension won't continue after a restart!
+//
+//
+// Desired State Configuration
+// The DSC extension handler grabs the configuration and implements the state on the
+// target virtual machine. If reboots are necessary for a configuration,
+// DSC continues to execute the state configuration after the reboots are completed.
+
+// Chef You can also use the Chef extension to apply recipes to the target machines.
+// "publisher": "Chef.Bootstrap.WindowsAzure",
+// "type": "LinuxChefClient",
+
+  publisher            = "Microsoft.Azure.Extensions"
+  type                 = "CustomScript"
+  type_handler_version = "2.0"
+
+
+  settings = <<SETTINGS
+    {
+        "commandToExecute": "hostname && uptime"
+    }
+SETTINGS
+
+
+  tags = {
+    environment = "Production"
+  }
+}
+
+//Azure automation state configuration
+//
+//https://docs.microsoft.com/en-us/azure/automation/
+//
+//Azure automation state configuration is the service you use to make sure that your DSC configurations
+//are managed properly and deployed across your nodes (virtual machines).
+//Azure automation state configuration works with both Azure virtual machines and machines on-premises.
+//It also works with machines on other cloud providers.
+//Through an intuitive Azure portal process, you can apply configurations to all of your nodes.
+
+

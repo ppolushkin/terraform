@@ -1,0 +1,366 @@
+
+
+//https://docs.microsoft.com/en-us/learn/modules/load-balance-web-traffic-with-application-gateway/2-routing-traffic-with-application-gateway
+
+resource "azurerm_resource_group" "rg" {
+  name = "rg-weu"
+  location = "West Europe"
+  tags = {
+    createdBy = "terraform"
+  }
+}
+
+resource "azurerm_virtual_network" "vehicle" {
+  name = "vehicle-vn"
+  location = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space = [
+    "10.0.0.0/16"]
+}
+
+resource "azurerm_subnet" "web" {
+  name = "webServerSubnet"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vehicle.name
+  address_prefixes = [
+    "10.0.1.0/24"]
+}
+
+//for testing
+resource "azurerm_public_ip" "web1" {
+  name = "web1"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  allocation_method = "Dynamic"
+}
+
+resource "azurerm_public_ip" "web3" {
+  name = "web3"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  allocation_method = "Dynamic"
+}
+
+
+resource "azurerm_network_interface" "web1" {
+  name                = "webServer1"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.web.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id = azurerm_public_ip.web1.id
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "webServer1" {
+  name                = "webServer1"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_DS1_v2"
+  admin_username      = "adminuser"
+
+  //todo: that piece of shit does not work!
+  custom_data = filebase64("${path.module}/network/module-files/scripts/vmconfig.sh")
+
+  network_interface_ids = [
+    azurerm_network_interface.web1.id,
+  ]
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "18.04-LTS"
+    version   = "latest"
+  }
+}
+
+//todo: uncomment and run
+//az vm create \
+//--resource-group rg-weu \
+//--name webServer3 \
+//--image UbuntuLTS \
+//--admin-username azureuser \
+//--generate-ssh-keys \
+//--vnet-name vehicleAppVnet \
+//--subnet webServerSubnet \
+//--public-ip-address "/subscriptions/9d72b6f3-8623-4c8d-ac58-a56de6591918/resourceGroups/rg-weu/providers/Microsoft.Network/publicIPAddresses/web3" \
+//--nsg "" \
+//--custom-data module-files/scripts/vmconfig.sh \
+
+
+resource "azurerm_network_interface" "web2" {
+  name                = "webServer2"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.web.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "webServer2" {
+  name                = "webServer2"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_DS1_v2"
+  admin_username      = "adminuser"
+  custom_data = filebase64("${path.module}/module-files/scripts/vmconfig.sh")
+
+  network_interface_ids = [
+    azurerm_network_interface.web2.id,
+  ]
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "18.04-LTS"
+    version   = "latest"
+  }
+}
+
+// app service
+
+resource "azurerm_app_service_plan" "sp" {
+  name                = "licenserenewal-srzpo2"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  sku {
+    tier = "Standard"
+    size = "S1"
+  }
+}
+
+// todo: that is does not work
+//resource "azurerm_app_service" "app" {
+//  name                = "app-service"
+//  location            = azurerm_resource_group.rg.location
+//  resource_group_name = azurerm_resource_group.rg.name
+//  app_service_plan_id = azurerm_app_service_plan.sp.id
+//
+//  site_config {
+//    dotnet_framework_version = "v2.0"
+////    scm_type                 = "GitHub"
+//  }
+//
+//  source_control {
+//    repo_url = "https://github.com/MicrosoftDocs/mslearn-load-balance-web-traffic-with-application-gateway"
+//    branch = "appService"
+//  }
+//}
+
+// todo: uncomment and run
+//az webapp create \
+//--resource-group rg-weu \
+//--name app-service \
+//--plan licenserenewal-srzpo2 \
+//--deployment-source-url https://github.com/MicrosoftDocs/mslearn-load-balance-web-traffic-with-application-gateway \
+//--deployment-source-branch appService --runtime "DOTNETCORE|2.1"
+
+
+//Application gateway
+
+//You must create this virtual network and a dedicated subnet before setting up Application Gateway.
+// Application Gateway uses a number of private addresses for internal use and for communicating with each instance
+// if the gateway scales out. For example, If you plan on scaling out to four instances, create a /28 size subnet.
+//If you're likely to scale to more instances, then create a bigger subnet.
+resource "azurerm_subnet" "gateway" {
+  name = "appGatewaySubnet"
+  resource_group_name = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vehicle.name
+  address_prefixes = [
+    "10.0.0.0/24"]
+}
+
+resource "azurerm_public_ip" "gw" {
+  name = "appGatewayPublicIp"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  sku = "Standard"
+  allocation_method = "Static"
+  domain_name_label = "srzpo2vehicleapp"
+}
+
+locals {
+  frontend_port_name             = "${azurerm_virtual_network.vehicle.name}-feport"
+  frontend_ip_configuration_name = "${azurerm_virtual_network.vehicle.name}-feip"
+  http_setting_name              = "${azurerm_virtual_network.vehicle.name}-be-htst"
+  request_routing_rule_name      = "${azurerm_virtual_network.vehicle.name}-rqrt"
+  redirect_configuration_name    = "${azurerm_virtual_network.vehicle.name}-rdrcfg"
+}
+
+//https://docs.microsoft.com/en-us/azure/application-gateway/how-application-gateway-works
+
+resource "azurerm_application_gateway" "appgateway" {
+
+  name                = "appgateway"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+//Front-end api configuration
+//Azure Application Gateway can be used as an internal application load balancer or as an internet-facing application load balancer.
+//An internet-facing application gateway uses public IP addresses.
+  frontend_ip_configuration {
+    name                 = local.frontend_ip_configuration_name
+    public_ip_address_id = azurerm_public_ip.gw.id
+    //    private_ip_address = "10.0.0.4"
+  }
+
+  frontend_port {
+    name = local.frontend_port_name
+    port = 80
+  }
+
+  gateway_ip_configuration {
+    name      = "my-gateway-ip-configuration"
+    subnet_id = azurerm_subnet.gateway.id
+  }
+
+//Firewall
+
+//A listener is a logical entity that checks for connection requests.
+// It can be more than one http listeners
+// For multi domain setup you need same number as domains
+  http_listener {
+    name                           = "http_listener"
+    frontend_ip_configuration_name = local.frontend_ip_configuration_name
+    frontend_port_name             = local.frontend_port_name
+    protocol                       = "Http"
+
+//Application gateway provides a capability which allows users to override the HTTP host
+//header in the request based on the host name of the back-end.
+//This capability enables support for multi-tenant back ends such as Azure App service web apps and API management.
+//This capability is available for both the v1 and v2 standard and WAF SKUs.
+//    host_name = "myhost.com"
+
+//   ssl_certificate_name = ""
+//
+//   custom_error_configuration {
+//      custom_error_page_url = ""
+//      status_code = ""
+//   }
+
+  }
+
+//If a web application firewall (WAF) is in use, the application gateway check
+//the request headers and the body, if present, against WAF rules
+  sku {
+//The Standard and WAF tiers are available in two versions, V1 and V2.
+//V2 supports Azure availability zones, but is currently in preview.
+    name     = "WAF_v2"
+    tier     = "WAF_v2"
+// number of gateway instances. Correlates with gateway subnet
+// you can have fixed capacity or autoscaled
+    capacity = 2
+  }
+
+//  autoscale_configuration {
+//    min_capacity = 0
+//    max_capacity = 100
+//  }
+
+
+//  waf_configuration {
+//    enabled = true
+//    firewall_mode = "Detection" "Prevention"
+//    rule_set_type = "OWASP"
+//    rule_set_version = "3.1"
+//  }
+
+  url_path_map {
+    name = "urlPathMap"
+    path_rule {
+      name = "urlPathMap"
+      paths = ["/VehicleRegistration/*"]
+      backend_address_pool_name = "vmPool"
+      backend_http_settings_name = local.http_setting_name
+    }
+    path_rule {
+      name = "appPathRule"
+      paths = ["/LicenseRenewal/*"]
+      backend_address_pool_name = "appServicePool"
+      backend_http_settings_name = local.http_setting_name
+      //      rewrite_rule_set_name = "urlPathMap"
+    }
+    default_backend_http_settings_name = local.http_setting_name
+    default_backend_address_pool_name = "vmPool"
+  }
+
+  request_routing_rule {
+    name                       = "urlPathMap"
+    rule_type                  = "PathBasedRouting"
+    http_listener_name         = "http_listener"
+    //    backend_address_pool_name  = "vmPool"
+    //    backend_http_settings_name = local.http_setting_name
+    url_path_map_name = "urlPathMap"
+  }
+
+// There is ability to rewrite headers
+//  rewrite_rule_set {
+//    name = "rule-set1"
+//    rewrite_rule {
+//      name = ""
+//      rule_sequence = 0
+//    }
+//  }
+
+// Backend pools
+  backend_address_pool {
+    name = "vmPool"
+    ip_addresses = [azurerm_network_interface.web1.private_ip_address, azurerm_network_interface.web2.private_ip_address]
+  }
+
+  backend_address_pool {
+    name = "appServicePool"
+    fqdns = ["app-service.azurewebsites.net"]
+  }
+
+  backend_http_settings {
+    name                  = local.http_setting_name
+    cookie_based_affinity = "Disabled"
+    port                  = 80
+    protocol              = "Http"
+
+//This feature helps when the domain name of the back end is different from the DNS name of the application gateway,
+//and the back end relies on a specific host header to resolve to the correct endpoint.
+//An example case is multi-tenant services as the back end. An app service is a multi-tenant service that uses a
+//shared space with a single IP address.
+    pick_host_name_from_backend_address = true
+  }
+
+  probe {
+    interval = 15
+    name = "customProbe"
+    path = "/"
+    protocol = "Http"
+    timeout = 10
+    unhealthy_threshold = 5
+    pick_host_name_from_backend_http_settings = true
+  }
+
+}
